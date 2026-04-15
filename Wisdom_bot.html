@@ -1,0 +1,1795 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Wisdom Ignited — RAG Knowledge Base</title>
+
+    <!--
+    ╔══════════════════════════════════════════════════════════════╗
+    ║  WISDOM IGNITED - RAG Knowledge Base System                  ║
+    ║  Site: wisdom.wisdomignited.com                              ║
+    ║                                                              ║
+    ║  ARCHITECTURE OVERVIEW:                                      ║
+    ║  1. OCR Layer   → Tesseract.js extracts text from images     ║
+    ║  2. Structure   → LLM formats raw text into knowledge docs   ║
+    ║  3. Embedding   → Text converted to vector numbers           ║
+    ║  4. Storage     → IndexedDB stores everything persistently   ║
+    ║  5. Retrieval   → Cosine similarity finds relevant chunks    ║
+    ║  6. Generation  → LLM answers using retrieved context        ║
+    ║                                                              ║
+    ║  DEFAULT MODEL: openai/gpt-oss-120b:free                     ║
+    ╚══════════════════════════════════════════════════════════════╝
+    -->
+
+    <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@400;500;600;700&family=Source+Sans+3:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+
+    <!--
+    Tesseract.js: Pure JavaScript OCR engine.
+    Runs entirely in the browser — no server needed.
+    Downloads a trained language model (~4MB for English,
+    cached after first use) and processes images in a
+    background Web Worker so the UI stays responsive.
+    -->
+    <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js"></script>
+
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    fontFamily: {
+                        display: ['Cormorant Garamond', 'serif'],
+                        body: ['Source Sans 3', 'sans-serif'],
+                    },
+                    colors: {
+                        wisdom: {
+                            900: '#0C0B09', 800: '#15140F', 700: '#1C1B16',
+                            600: '#23221B', 500: '#2A2822', 400: '#3A3628',
+                            300: '#6B665C', 200: '#A09A8C', 100: '#D0C9B8', 50: '#F0EBE0',
+                        },
+                        gold: { 600: '#8B7230', 500: '#D4A843', 400: '#E8BC57', 300: '#F0D080' }
+                    }
+                }
+            }
+        }
+    </script>
+
+    <style>
+        :root {
+            --bg-deep: #0C0B09;
+            --bg-primary: #15140F;
+            --bg-card: #1C1B16;
+            --bg-card-hover: #23221B;
+            --bg-input: #121110;
+            --accent: #D4A843;
+            --accent-hover: #E8BC57;
+            --accent-dim: #8B7230;
+            --accent-glow: rgba(212, 168, 67, 0.12);
+            --text-primary: #F0EBE0;
+            --text-secondary: #A09A8C;
+            --text-muted: #6B665C;
+            --border: #2A2822;
+            --border-accent: #3A3628;
+            --success: #7BA67B;
+            --error: #C75050;
+        }
+
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        html { scroll-behavior: smooth; }
+        body {
+            font-family: 'Source Sans 3', sans-serif;
+            background: var(--bg-deep);
+            color: var(--text-primary);
+            overflow: hidden;
+            height: 100vh;
+        }
+
+        ::-webkit-scrollbar { width: 6px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: var(--border-accent); border-radius: 3px; }
+        ::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
+
+        .bg-atmosphere {
+            position: fixed; inset: 0; z-index: 0; pointer-events: none;
+            background:
+                radial-gradient(ellipse 600px 400px at 10% 20%, rgba(212,168,67,0.04), transparent),
+                radial-gradient(ellipse 500px 500px at 90% 80%, rgba(139,114,48,0.03), transparent),
+                radial-gradient(ellipse 800px 300px at 50% 50%, rgba(212,168,67,0.02), transparent);
+        }
+
+        .sidebar {
+            width: 260px; min-width: 260px;
+            background: var(--bg-primary);
+            border-right: 1px solid var(--border);
+            display: flex; flex-direction: column;
+            transition: all 0.3s ease; z-index: 30;
+        }
+        .sidebar-brand { padding: 24px 20px; border-bottom: 1px solid var(--border); }
+
+        .nav-item {
+            display: flex; align-items: center; gap: 12px;
+            padding: 12px 20px; color: var(--text-secondary);
+            cursor: pointer; transition: all 0.2s ease;
+            border-left: 3px solid transparent;
+            font-size: 15px; font-weight: 500;
+        }
+        .nav-item:hover { color: var(--text-primary); background: rgba(212,168,67,0.05); }
+        .nav-item.active { color: var(--accent); background: var(--accent-glow); border-left-color: var(--accent); }
+        .nav-item i { width: 20px; text-align: center; font-size: 16px; }
+
+        .view { display: none; opacity: 0; transition: opacity 0.3s ease; }
+        .view.active { display: block; opacity: 1; }
+
+        .wisdom-card {
+            background: var(--bg-card); border: 1px solid var(--border);
+            border-radius: 12px; padding: 24px; transition: all 0.25s ease;
+        }
+        .wisdom-card:hover { border-color: var(--border-accent); background: var(--bg-card-hover); }
+
+        .stat-card {
+            background: var(--bg-card); border: 1px solid var(--border);
+            border-radius: 12px; padding: 20px 24px;
+            position: relative; overflow: hidden;
+        }
+        .stat-card::after {
+            content: ''; position: absolute; top: 0; right: 0;
+            width: 80px; height: 80px; border-radius: 50%;
+            background: var(--accent-glow); transform: translate(20px, -20px);
+        }
+
+        .drop-zone {
+            border: 2px dashed var(--border-accent); border-radius: 16px;
+            padding: 60px 40px; text-align: center; cursor: pointer;
+            transition: all 0.3s ease; background: rgba(28,27,22,0.5);
+        }
+        .drop-zone:hover, .drop-zone.drag-over { border-color: var(--accent); background: var(--accent-glow); }
+        .drop-zone.drag-over { transform: scale(1.01); }
+
+        .progress-bar { height: 4px; background: var(--border); border-radius: 2px; overflow: hidden; }
+        .progress-fill { height: 100%; background: linear-gradient(90deg, var(--accent-dim), var(--accent)); border-radius: 2px; transition: width 0.3s ease; }
+
+        .chat-messages {
+            flex: 1; overflow-y: auto; padding: 24px;
+            display: flex; flex-direction: column; gap: 20px;
+        }
+        .chat-bubble {
+            max-width: 85%; padding: 16px 20px; border-radius: 16px;
+            line-height: 1.6; font-size: 15px; animation: bubbleIn 0.3s ease;
+        }
+        @keyframes bubbleIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+        .chat-bubble.user {
+            align-self: flex-end; background: var(--accent-dim); color: var(--text-primary);
+            border-bottom-right-radius: 4px;
+        }
+        .chat-bubble.assistant {
+            align-self: flex-start; background: var(--bg-card);
+            border: 1px solid var(--border); border-bottom-left-radius: 4px;
+        }
+        .chat-bubble.assistant p { margin-bottom: 8px; }
+        .chat-bubble.assistant p:last-child { margin-bottom: 0; }
+
+        .context-badge {
+            display: inline-flex; align-items: center; gap: 6px;
+            font-size: 12px; color: var(--text-muted);
+            background: rgba(212,168,67,0.08); padding: 4px 10px;
+            border-radius: 20px; margin-top: 10px;
+        }
+
+        .typing-indicator span {
+            display: inline-block; width: 6px; height: 6px;
+            background: var(--text-muted); border-radius: 50%;
+            margin: 0 2px; animation: typingBounce 1.4s infinite;
+        }
+        .typing-indicator span:nth-child(2) { animation-delay: 0.2s; }
+        .typing-indicator span:nth-child(3) { animation-delay: 0.4s; }
+        @keyframes typingBounce { 0%,60%,100% { transform: translateY(0); } 30% { transform: translateY(-6px); } }
+
+        .doc-card {
+            background: var(--bg-card); border: 1px solid var(--border);
+            border-radius: 12px; overflow: hidden; transition: all 0.25s ease; cursor: pointer;
+        }
+        .doc-card:hover {
+            border-color: var(--accent-dim); transform: translateY(-2px);
+            box-shadow: 0 8px 24px rgba(0,0,0,0.3);
+        }
+        .doc-card-thumb { width: 100%; height: 140px; object-fit: cover; background: var(--bg-input); }
+        .doc-card-body { padding: 16px; }
+
+        .toast-container {
+            position: fixed; top: 20px; right: 20px; z-index: 9999;
+            display: flex; flex-direction: column; gap: 8px;
+        }
+        .toast {
+            padding: 14px 20px; border-radius: 10px; font-size: 14px; font-weight: 500;
+            display: flex; align-items: center; gap: 10px;
+            min-width: 300px; max-width: 420px; animation: toastIn 0.3s ease;
+            box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+        }
+        .toast.success { background: #1a2e1a; border: 1px solid #2a4a2a; color: #a8d8a8; }
+        .toast.error { background: #2e1a1a; border: 1px solid #4a2a2a; color: #d8a8a8; }
+        .toast.info { background: #1a1e2e; border: 1px solid #2a3a4a; color: #a8c8d8; }
+        .toast.warning { background: #2e2a1a; border: 1px solid #4a3a2a; color: #d8c8a8; }
+        @keyframes toastIn { from { opacity: 0; transform: translateX(40px); } to { opacity: 1; transform: translateX(0); } }
+        .toast.removing { animation: toastOut 0.3s ease forwards; }
+        @keyframes toastOut { to { opacity: 0; transform: translateX(40px); } }
+
+        .modal-overlay {
+            position: fixed; inset: 0; background: rgba(0,0,0,0.7);
+            backdrop-filter: blur(4px); z-index: 1000;
+            display: none; align-items: center; justify-content: center;
+        }
+        .modal-overlay.active { display: flex; }
+        .modal-content {
+            background: var(--bg-card); border: 1px solid var(--border);
+            border-radius: 16px; padding: 32px; max-width: 640px;
+            width: 90%; max-height: 80vh; overflow-y: auto;
+            animation: modalIn 0.3s ease;
+        }
+        @keyframes modalIn { from { opacity: 0; transform: scale(0.95) translateY(10px); } to { opacity: 1; transform: scale(1) translateY(0); } }
+
+        .wisdom-input {
+            width: 100%; background: var(--bg-input); border: 1px solid var(--border);
+            border-radius: 10px; padding: 12px 16px; color: var(--text-primary);
+            font-family: 'Source Sans 3', sans-serif; font-size: 15px;
+            transition: all 0.2s ease; outline: none;
+        }
+        .wisdom-input:focus { border-color: var(--accent-dim); box-shadow: 0 0 0 3px var(--accent-glow); }
+        .wisdom-input::placeholder { color: var(--text-muted); }
+        textarea.wisdom-input { resize: vertical; min-height: 100px; line-height: 1.6; }
+
+        .btn-primary {
+            background: linear-gradient(135deg, var(--accent-dim), var(--accent));
+            color: #0C0B09; font-weight: 600; padding: 12px 24px;
+            border-radius: 10px; border: none; cursor: pointer;
+            font-family: 'Source Sans 3', sans-serif; font-size: 15px;
+            transition: all 0.2s ease; display: inline-flex;
+            align-items: center; gap: 8px;
+        }
+        .btn-primary:hover {
+            background: linear-gradient(135deg, var(--accent), var(--accent-hover));
+            transform: translateY(-1px); box-shadow: 0 4px 16px rgba(212,168,67,0.3);
+        }
+        .btn-primary:disabled { opacity: 0.5; cursor: not-allowed; transform: none; box-shadow: none; }
+
+        .btn-ghost {
+            background: transparent; color: var(--text-secondary); font-weight: 500;
+            padding: 10px 18px; border-radius: 10px; border: 1px solid var(--border);
+            cursor: pointer; font-family: 'Source Sans 3', sans-serif; font-size: 14px;
+            transition: all 0.2s ease; display: inline-flex; align-items: center; gap: 8px;
+        }
+        .btn-ghost:hover { color: var(--text-primary); border-color: var(--border-accent); background: rgba(255,255,255,0.03); }
+
+        .btn-danger {
+            background: rgba(199,80,80,0.15); color: #d88;
+            border: 1px solid rgba(199,80,80,0.3); padding: 10px 18px;
+            border-radius: 10px; cursor: pointer; font-family: 'Source Sans 3', sans-serif;
+            font-size: 14px; font-weight: 500; transition: all 0.2s ease;
+        }
+        .btn-danger:hover { background: rgba(199,80,80,0.25); border-color: rgba(199,80,80,0.5); }
+
+        .keyword-tag {
+            display: inline-block; padding: 3px 10px; border-radius: 20px;
+            font-size: 12px; font-weight: 500;
+            background: rgba(212,168,67,0.1); color: var(--accent);
+            border: 1px solid rgba(212,168,67,0.15);
+        }
+
+        .welcome-glow {
+            position: absolute; width: 300px; height: 300px; border-radius: 50%;
+            background: radial-gradient(circle, rgba(212,168,67,0.08), transparent 70%);
+            animation: glowPulse 4s ease-in-out infinite;
+        }
+        @keyframes glowPulse { 0%,100% { transform: scale(1); opacity: 0.6; } 50% { transform: scale(1.15); opacity: 1; } }
+
+        .step-item { display: flex; align-items: flex-start; gap: 14px; padding: 14px 0; }
+        .step-icon {
+            width: 32px; height: 32px; border-radius: 50%;
+            display: flex; align-items: center; justify-content: center;
+            font-size: 13px; flex-shrink: 0; transition: all 0.3s ease;
+        }
+        .step-icon.pending { background: var(--border); color: var(--text-muted); }
+        .step-icon.active { background: var(--accent-glow); color: var(--accent); animation: stepPulse 1.5s infinite; }
+        .step-icon.done { background: rgba(123,166,123,0.2); color: var(--success); }
+        @keyframes stepPulse { 0%,100% { box-shadow: 0 0 0 0 var(--accent-glow); } 50% { box-shadow: 0 0 0 6px transparent; } }
+
+        .ingest-tab.active { background: var(--accent-glow); color: var(--accent); border-color: var(--accent-dim); }
+
+        /* Connected status indicator */
+        .status-dot {
+            width: 8px; height: 8px; border-radius: 50%; display: inline-block;
+            animation: statusPulse 2s ease-in-out infinite;
+        }
+        .status-dot.connected { background: var(--success); }
+        @keyframes statusPulse { 0%,100% { opacity: 1; } 50% { opacity: 0.4; } }
+
+        @media (max-width: 768px) {
+            .sidebar { width: 60px; min-width: 60px; }
+            .sidebar .nav-label, .sidebar .brand-text, .sidebar .status-line { display: none; }
+            .sidebar-brand { padding: 20px 16px; }
+            .nav-item { justify-content: center; padding: 14px; border-left: none; border-bottom: 3px solid transparent; }
+            .nav-item.active { border-bottom-color: var(--accent); border-left-color: transparent; }
+            .chat-bubble { max-width: 95%; }
+        }
+
+        @media (prefers-reduced-motion: reduce) {
+            *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
+        }
+    </style>
+</head>
+<body>
+    <div class="bg-atmosphere"></div>
+    <div class="toast-container" id="toastContainer"></div>
+    <div class="modal-overlay" id="modalOverlay" role="dialog" aria-modal="true">
+        <div class="modal-content" id="modalContent"></div>
+    </div>
+
+    <div id="app" class="flex h-screen relative z-10">
+
+        <!-- SIDEBAR -->
+        <aside class="sidebar" id="sidebar" style="display: none;">
+            <div class="sidebar-brand">
+                <div class="flex items-center gap-3">
+                    <div class="w-9 h-9 rounded-lg flex items-center justify-center"
+                         style="background: linear-gradient(135deg, var(--accent-dim), var(--accent));">
+                        <i class="fas fa-fire-flame-curved text-sm" style="color: #0C0B09;"></i>
+                    </div>
+                    <div class="brand-text">
+                        <div class="font-display text-lg font-bold" style="color: var(--accent);">Wisdom</div>
+                        <div class="text-xs" style="color: var(--text-muted); margin-top: -2px;">Ignited</div>
+                    </div>
+                </div>
+            </div>
+            <nav class="flex-1 py-4" role="navigation" aria-label="Main navigation">
+                <div class="nav-item active" data-view="dashboard" role="button" tabindex="0">
+                    <i class="fas fa-th-large"></i><span class="nav-label">Dashboard</span>
+                </div>
+                <div class="nav-item" data-view="ingest" role="button" tabindex="0">
+                    <i class="fas fa-cloud-arrow-up"></i><span class="nav-label">Ingest Knowledge</span>
+                </div>
+                <div class="nav-item" data-view="library" role="button" tabindex="0">
+                    <i class="fas fa-book-open"></i><span class="nav-label">Knowledge Library</span>
+                </div>
+                <div class="nav-item" data-view="chat" role="button" tabindex="0">
+                    <i class="fas fa-comments"></i><span class="nav-label">Ask Wisdom</span>
+                </div>
+            </nav>
+            <!-- Connection status -->
+            <div class="px-5 py-2 status-line">
+                <div class="flex items-center gap-2 text-xs" style="color: var(--text-muted);">
+                    <span class="status-dot connected"></span>
+                    <span id="statusText">Connected — gpt-oss-120b</span>
+                </div>
+            </div>
+            <div class="py-4" style="border-top: 1px solid var(--border);">
+                <div class="nav-item" data-view="settings" role="button" tabindex="0">
+                    <i class="fas fa-gear"></i><span class="nav-label">Settings</span>
+                </div>
+            </div>
+        </aside>
+
+        <!-- MAIN CONTENT -->
+        <main class="flex-1 overflow-hidden flex flex-col">
+
+            <!-- DASHBOARD VIEW -->
+            <div class="view" id="view-dashboard">
+                <div class="h-full overflow-y-auto p-8">
+                    <div class="max-w-5xl mx-auto">
+                        <h2 class="font-display text-3xl font-bold mb-1" style="color: var(--text-primary);">Dashboard</h2>
+                        <p class="mb-8" style="color: var(--text-secondary);">Overview of your knowledge base</p>
+                        <div class="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-8">
+                            <div class="stat-card">
+                                <div class="text-sm font-medium mb-1" style="color: var(--text-muted);">Total Documents</div>
+                                <div class="text-3xl font-bold font-display" id="statDocs" style="color: var(--accent);">0</div>
+                            </div>
+                            <div class="stat-card">
+                                <div class="text-sm font-medium mb-1" style="color: var(--text-muted);">Knowledge Chunks</div>
+                                <div class="text-3xl font-bold font-display" id="statChunks" style="color: var(--accent);">0</div>
+                            </div>
+                            <div class="stat-card">
+                                <div class="text-sm font-medium mb-1" style="color: var(--text-muted);">Image Sources</div>
+                                <div class="text-3xl font-bold font-display" id="statImages" style="color: var(--accent);">0</div>
+                            </div>
+                        </div>
+                        <div class="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-8">
+                            <button class="wisdom-card text-left" onclick="switchView('ingest')" style="cursor:pointer;">
+                                <div class="flex items-center gap-4">
+                                    <div class="w-12 h-12 rounded-xl flex items-center justify-center flex-shrink-0" style="background:var(--accent-glow);">
+                                        <i class="fas fa-cloud-arrow-up" style="color:var(--accent);"></i>
+                                    </div>
+                                    <div>
+                                        <div class="font-semibold mb-1" style="color:var(--text-primary);">Add Knowledge</div>
+                                        <div class="text-sm" style="color:var(--text-secondary);">Upload images or paste text to expand your knowledge base</div>
+                                    </div>
+                                </div>
+                            </button>
+                            <button class="wisdom-card text-left" onclick="switchView('chat')" style="cursor:pointer;">
+                                <div class="flex items-center gap-4">
+                                    <div class="w-12 h-12 rounded-xl flex items-center justify-center flex-shrink-0" style="background:var(--accent-glow);">
+                                        <i class="fas fa-comments" style="color:var(--accent);"></i>
+                                    </div>
+                                    <div>
+                                        <div class="font-semibold mb-1" style="color:var(--text-primary);">Ask Questions</div>
+                                        <div class="text-sm" style="color:var(--text-secondary);">Query your knowledge base with natural language</div>
+                                    </div>
+                                </div>
+                            </button>
+                        </div>
+                        <div>
+                            <h3 class="font-display text-xl font-semibold mb-4" style="color:var(--text-primary);">Recent Documents</h3>
+                            <div id="recentDocs" class="space-y-3">
+                                <div class="wisdom-card text-center" style="color:var(--text-muted);">
+                                    <i class="fas fa-inbox mb-2 text-2xl" style="opacity:0.3;"></i>
+                                    <p>No documents yet. Start by adding knowledge.</p>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- INGEST VIEW -->
+            <div class="view" id="view-ingest">
+                <div class="h-full overflow-y-auto p-8">
+                    <div class="max-w-3xl mx-auto">
+                        <h2 class="font-display text-3xl font-bold mb-1" style="color:var(--text-primary);">Ingest Knowledge</h2>
+                        <p class="mb-8" style="color:var(--text-secondary);">Upload images or enter text to add to your knowledge base</p>
+
+                        <div class="flex gap-2 mb-6">
+                            <button class="btn-ghost ingest-tab active" data-tab="image" style="border-radius:8px;">
+                                <i class="fas fa-image"></i> Image Upload
+                            </button>
+                            <button class="btn-ghost ingest-tab" data-tab="text" style="border-radius:8px;">
+                                <i class="fas fa-keyboard"></i> Text Input
+                            </button>
+                        </div>
+
+                        <div id="ingestTabImage">
+                            <div class="drop-zone" id="dropZone" role="button" tabindex="0" aria-label="Drop an image here or click to browse">
+                                <i class="fas fa-cloud-arrow-up text-4xl mb-4" style="color:var(--text-muted);"></i>
+                                <p class="text-lg font-semibold mb-2" style="color:var(--text-primary);">Drop image here or click to browse</p>
+                                <p class="text-sm" style="color:var(--text-muted);">Supports JPG, PNG, WebP, BMP — processed entirely in your browser</p>
+                                <input type="file" id="fileInput" accept="image/*" class="hidden" aria-hidden="true">
+                            </div>
+                            <div id="imagePreview" class="mt-4" style="display:none;">
+                                <div class="wisdom-card">
+                                    <div class="flex items-center gap-4">
+                                        <img id="previewImg" class="w-24 h-24 rounded-lg object-cover" style="background:var(--bg-input);" alt="Preview">
+                                        <div class="flex-1">
+                                            <div class="font-semibold" id="previewName" style="color:var(--text-primary);"></div>
+                                            <div class="text-sm" id="previewSize" style="color:var(--text-muted);"></div>
+                                        </div>
+                                        <button class="btn-ghost" id="btnClearImage"><i class="fas fa-xmark"></i></button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div id="ingestTabText" style="display:none;">
+                            <textarea id="textInput" class="wisdom-input" placeholder="Paste your knowledge text here..." rows="8" aria-label="Enter knowledge text"></textarea>
+                        </div>
+
+                        <button class="btn-primary w-full justify-center mt-6" id="btnProcess" disabled>
+                            <i class="fas fa-bolt"></i> Process and Store Knowledge
+                        </button>
+
+                        <div id="processingArea" class="mt-6" style="display:none;">
+                            <div class="wisdom-card">
+                                <div class="font-semibold mb-4" style="color:var(--text-primary);">Processing Pipeline</div>
+                                <div class="step-item" id="stepOcr">
+                                    <div class="step-icon pending"><i class="fas fa-eye"></i></div>
+                                    <div class="flex-1">
+                                        <div class="font-medium text-sm" style="color:var(--text-primary);">Extract Text (OCR)</div>
+                                        <div class="text-xs" style="color:var(--text-muted);">Reading text from the image...</div>
+                                        <div class="progress-bar mt-2" style="display:none;" id="ocrProgress">
+                                            <div class="progress-fill" style="width:0%;"></div>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div class="step-item" id="stepStructure">
+                                    <div class="step-icon pending"><i class="fas fa-layer-group"></i></div>
+                                    <div class="flex-1">
+                                        <div class="font-medium text-sm" style="color:var(--text-primary);">Structure Document</div>
+                                        <div class="text-xs" style="color:var(--text-muted);">AI is organizing and enhancing the content...</div>
+                                    </div>
+                                </div>
+                                <div class="step-item" id="stepEmbed">
+                                    <div class="step-icon pending"><i class="fas fa-vector-square"></i></div>
+                                    <div class="flex-1">
+                                        <div class="font-medium text-sm" style="color:var(--text-primary);">Generate Embeddings</div>
+                                        <div class="text-xs" style="color:var(--text-muted);">Creating vector representations for search...</div>
+                                    </div>
+                                </div>
+                                <div class="step-item" id="stepStore">
+                                    <div class="step-icon pending"><i class="fas fa-database"></i></div>
+                                    <div class="flex-1">
+                                        <div class="font-medium text-sm" style="color:var(--text-primary);">Store in Knowledge Base</div>
+                                        <div class="text-xs" style="color:var(--text-muted);">Saving to local database...</div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div id="resultArea" class="mt-6" style="display:none;">
+                            <div class="wisdom-card" style="border-color:rgba(123,166,123,0.3);">
+                                <div class="flex items-center gap-3 mb-4">
+                                    <div class="w-8 h-8 rounded-full flex items-center justify-center" style="background:rgba(123,166,123,0.2);">
+                                        <i class="fas fa-check text-sm" style="color:var(--success);"></i>
+                                    </div>
+                                    <div class="font-semibold" style="color:var(--success);">Knowledge Stored Successfully</div>
+                                </div>
+                                <div class="mb-3">
+                                    <div class="text-xs font-semibold uppercase tracking-wider mb-1" style="color:var(--text-muted);">Title</div>
+                                    <div id="resultTitle" class="font-display text-xl font-semibold" style="color:var(--text-primary);"></div>
+                                </div>
+                                <div class="mb-3">
+                                    <div class="text-xs font-semibold uppercase tracking-wider mb-1" style="color:var(--text-muted);">Summary</div>
+                                    <div id="resultSummary" class="text-sm leading-relaxed" style="color:var(--text-secondary);"></div>
+                                </div>
+                                <div class="mb-3">
+                                    <div class="text-xs font-semibold uppercase tracking-wider mb-2" style="color:var(--text-muted);">Keywords</div>
+                                    <div id="resultKeywords" class="flex flex-wrap gap-2"></div>
+                                </div>
+                                <div>
+                                    <div class="text-xs font-semibold uppercase tracking-wider mb-1" style="color:var(--text-muted);">Structured Content</div>
+                                    <div id="resultContent" class="text-sm leading-relaxed p-3 rounded-lg mt-1"
+                                         style="color:var(--text-secondary); background:var(--bg-input); white-space:pre-wrap; max-height:200px; overflow-y:auto;"></div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- LIBRARY VIEW -->
+            <div class="view" id="view-library">
+                <div class="h-full overflow-y-auto p-8">
+                    <div class="max-w-5xl mx-auto">
+                        <div class="flex items-center justify-between mb-8 flex-wrap gap-4">
+                            <div>
+                                <h2 class="font-display text-3xl font-bold mb-1" style="color:var(--text-primary);">Knowledge Library</h2>
+                                <p style="color:var(--text-secondary);">Browse and manage your documents</p>
+                            </div>
+                            <input type="text" id="librarySearch" class="wisdom-input" placeholder="Search documents..." style="max-width:280px;" aria-label="Search documents">
+                        </div>
+                        <div id="libraryGrid" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4"></div>
+                        <div id="libraryEmpty" class="wisdom-card text-center py-16" style="color:var(--text-muted);">
+                            <i class="fas fa-book-open text-4xl mb-4" style="opacity:0.3;"></i>
+                            <p class="text-lg font-medium mb-2">Your library is empty</p>
+                            <p class="text-sm mb-4">Upload images or enter text to start building your knowledge base.</p>
+                            <button class="btn-primary" onclick="switchView('ingest')"><i class="fas fa-plus"></i> Add Knowledge</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- CHAT VIEW -->
+            <div class="view" id="view-chat">
+                <div class="h-full flex flex-col">
+                    <div class="px-8 py-4 flex items-center justify-between" style="border-bottom:1px solid var(--border);">
+                        <div>
+                            <h2 class="font-display text-xl font-bold" style="color:var(--text-primary);">Ask Wisdom</h2>
+                            <p class="text-sm" style="color:var(--text-muted);">Answers are grounded in your knowledge base</p>
+                        </div>
+                        <button class="btn-ghost" id="btnClearChat"><i class="fas fa-broom"></i> Clear</button>
+                    </div>
+                    <div class="chat-messages" id="chatMessages">
+                        <div class="chat-bubble assistant">
+                            <p>Welcome to Wisdom Ignited. Ask me anything about the knowledge stored in your base, and I will find the most relevant information to answer your question.</p>
+                            <p style="color:var(--text-muted);font-size:13px;margin-top:8px;margin-bottom:0;">
+                                Try questions like "What documents do I have?" or ask about specific topics in your uploads.
+                            </p>
+                        </div>
+                    </div>
+                    <div class="px-8 py-4" style="border-top:1px solid var(--border);">
+                        <div class="flex gap-3 items-end max-w-3xl mx-auto">
+                            <textarea id="chatInput" class="wisdom-input" placeholder="Ask a question about your knowledge..."
+                                      rows="1" style="min-height:44px;max-height:120px;resize:none;" aria-label="Enter your question"></textarea>
+                            <button class="btn-primary" id="btnSendChat" style="height:44px;flex-shrink:0;">
+                                <i class="fas fa-paper-plane"></i>
+                            </button>
+                        </div>
+                        <p class="text-xs text-center mt-2" style="color:var(--text-muted);">
+                            Powered by RAG — answers are retrieved from your knowledge base, not hallucinated
+                        </p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- SETTINGS VIEW -->
+            <div class="view" id="view-settings">
+                <div class="h-full overflow-y-auto p-8">
+                    <div class="max-w-2xl mx-auto">
+                        <h2 class="font-display text-3xl font-bold mb-1" style="color:var(--text-primary);">Settings</h2>
+                        <p class="mb-8" style="color:var(--text-secondary);">Configure your RAG system</p>
+
+                        <div class="wisdom-card mb-6">
+                            <h3 class="font-semibold mb-4" style="color:var(--text-primary);">
+                                <i class="fas fa-key mr-2" style="color:var(--accent);"></i>API Configuration
+                            </h3>
+                            <div class="mb-4">
+                                <label class="block text-sm font-medium mb-2" style="color:var(--text-secondary);">OpenRouter API Key</label>
+                                <input type="password" id="settingsApiKey" class="wisdom-input" placeholder="sk-or-v1-..." aria-label="API Key">
+                                <p class="text-xs mt-1" style="color:var(--success);">
+                                    <i class="fas fa-circle-check mr-1"></i>API key is configured and ready
+                                </p>
+                            </div>
+                            <div class="mb-4">
+                                <label class="block text-sm font-medium mb-2" style="color:var(--text-secondary);">Chat Model</label>
+                                <select id="settingsModel" class="wisdom-input" aria-label="Select chat model">
+                                    <option value="openai/gpt-oss-120b:free" selected>GPT-OSS 120B (Free)</option>
+                                    <option value="meta-llama/llama-3.1-8b-instruct:free">Llama 3.1 8B (Free)</option>
+                                    <option value="google/gemma-2-9b-it:free">Gemma 2 9B (Free)</option>
+                                    <option value="qwen/qwen-2-7b-instruct:free">Qwen 2 7B (Free)</option>
+                                    <option value="microsoft/phi-3-mini-128k-instruct:free">Phi-3 Mini (Free)</option>
+                                    <option value="openai/gpt-4o-mini">GPT-4o Mini (Paid)</option>
+                                    <option value="anthropic/claude-3.5-sonnet">Claude 3.5 Sonnet (Paid)</option>
+                                </select>
+                            </div>
+                            <div>
+                                <label class="block text-sm font-medium mb-2" style="color:var(--text-secondary);">Embedding Model (for semantic search)</label>
+                                <select id="settingsEmbedding" class="wisdom-input" aria-label="Select embedding model">
+                                    <option value="none" selected>Keyword Search (No API cost)</option>
+                                    <option value="openai/text-embedding-3-small">OpenAI Embedding 3 Small (Paid)</option>
+                                    <option value="openai/text-embedding-ada-002">OpenAI Ada 002 (Paid)</option>
+                                </select>
+                                <p class="text-xs mt-1" style="color:var(--text-muted);">Keyword search works well for small bases. Embeddings give better semantic matching.</p>
+                            </div>
+                        </div>
+
+                        <div class="wisdom-card mb-6">
+                            <h3 class="font-semibold mb-4" style="color:var(--text-primary);">
+                                <i class="fas fa-sliders mr-2" style="color:var(--accent);"></i>Processing
+                            </h3>
+                            <div class="mb-4">
+                                <label class="block text-sm font-medium mb-2" style="color:var(--text-secondary);">Chunk Size (words per knowledge segment)</label>
+                                <input type="number" id="settingsChunkSize" class="wisdom-input" value="300" min="100" max="1000" step="50" aria-label="Chunk size">
+                                <p class="text-xs mt-1" style="color:var(--text-muted);">Smaller chunks = more precise retrieval. Larger chunks = more context per result.</p>
+                            </div>
+                            <div>
+                                <label class="block text-sm font-medium mb-2" style="color:var(--text-secondary);">Max Retrieved Chunks per query</label>
+                                <input type="number" id="settingsTopK" class="wisdom-input" value="5" min="1" max="20" step="1" aria-label="Top K chunks">
+                            </div>
+                        </div>
+
+                        <button class="btn-primary w-full justify-center mb-6" id="btnSaveSettings">
+                            <i class="fas fa-floppy-disk"></i> Save Settings
+                        </button>
+
+                        <div class="wisdom-card" style="border-color:rgba(199,80,80,0.2);">
+                            <h3 class="font-semibold mb-4" style="color:var(--error);">
+                                <i class="fas fa-triangle-exclamation mr-2"></i>Danger Zone
+                            </h3>
+                            <p class="text-sm mb-4" style="color:var(--text-secondary);">Permanently delete all documents from your local knowledge base. This cannot be undone.</p>
+                            <button class="btn-danger" id="btnClearDatabase"><i class="fas fa-trash mr-2"></i> Clear Entire Knowledge Base</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+        </main>
+    </div>
+
+    <script>
+    // ================================================================
+    // SECTION 1: APPLICATION STATE
+    // ================================================================
+    // The API key is pre-configured so the app is fully functional
+    // on page load — no setup screen needed. The key is only ever
+    // sent to openrouter.ai endpoints, never anywhere else.
+    // ================================================================
+
+    const AppState = {
+        apiKey: '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',
+        chatModel: 'openai/gpt-oss-120b:free',
+        embeddingModel: 'none',
+        chunkSize: 300,
+        topK: 5,
+        isProcessing: false,
+        currentImageFile: null,
+        chatHistory: [],
+    };
+
+
+    // ================================================================
+    // SECTION 2: TOAST NOTIFICATION SYSTEM
+    // ================================================================
+    // Non-blocking notifications that replace alert().
+    // Types: success (green), error (red), info (blue), warning (amber).
+    // Auto-dismiss after `duration` ms with a slide-out animation.
+    // ================================================================
+
+    function createToast(message, type = 'info', duration = 4000) {
+        const container = document.getElementById('toastContainer');
+        const toast = document.createElement('div');
+        toast.className = `toast ${type}`;
+        const icons = { success: 'fa-circle-check', error: 'fa-circle-xmark', info: 'fa-circle-info', warning: 'fa-triangle-exclamation' };
+        toast.innerHTML = `<i class="fas ${icons[type] || icons.info}"></i><span style="flex:1;">${message}</span>`;
+        container.appendChild(toast);
+        setTimeout(() => {
+            toast.classList.add('removing');
+            setTimeout(() => toast.remove(), 300);
+        }, duration);
+    }
+
+
+    // ================================================================
+    // SECTION 3: DATABASE LAYER (IndexedDB)
+    // ================================================================
+    // Browser-native NoSQL database. Survives refreshes and restarts.
+    // Can store hundreds of MB of structured data.
+    //
+    // Schema:
+    //   Database: "WisdomIgnitedDB" v1
+    //   Store: "documents" (keyPath: "id", index: "createdAt")
+    //
+    // Each document:
+    //   id, title, source, sourceName, rawText, content, summary,
+    //   keywords[], category, createdAt, thumbnail, chunks[]
+    //   where each chunk = { text, embedding }
+    // ================================================================
+
+    const DB = {
+        name: 'WisdomIgnitedDB',
+        version: 1,
+        storeName: 'documents',
+
+        // Open or create the database. Returns IDBDatabase instance.
+        open() {
+            return new Promise((resolve, reject) => {
+                const request = indexedDB.open(this.name, this.version);
+                // Fires on first creation or version change — create stores here
+                request.onupgradeneeded = (event) => {
+                    const db = event.target.result;
+                    if (!db.objectStoreNames.contains(this.storeName)) {
+                        const store = db.createObjectStore(this.storeName, { keyPath: 'id' });
+                        store.createIndex('createdAt', 'createdAt', { unique: false });
+                    }
+                };
+                request.onsuccess = (event) => resolve(event.target.result);
+                request.onerror = (event) => reject(event.target.error);
+            });
+        },
+
+        // Upsert a document (insert or replace by ID)
+        async put(document) {
+            const db = await this.open();
+            return new Promise((resolve, reject) => {
+                const tx = db.transaction(this.storeName, 'readwrite');
+                const store = tx.objectStore(this.storeName);
+                const request = store.put(document);
+                request.onsuccess = () => resolve(document);
+                request.onerror = (event) => reject(event.target.error);
+                tx.oncomplete = () => db.close();
+            });
+        },
+
+        // Get one document by ID
+        async get(id) {
+            const db = await this.open();
+            return new Promise((resolve, reject) => {
+                const tx = db.transaction(this.storeName, 'readonly');
+                const store = tx.objectStore(this.storeName);
+                const request = store.get(id);
+                request.onsuccess = () => resolve(request.result || null);
+                request.onerror = (event) => reject(event.target.error);
+                tx.oncomplete = () => db.close();
+            });
+        },
+
+        // Get all documents sorted newest-first using a cursor on the createdAt index
+        async getAll() {
+            const db = await this.open();
+            return new Promise((resolve, reject) => {
+                const tx = db.transaction(this.storeName, 'readonly');
+                const store = tx.objectStore(this.storeName);
+                const index = store.index('createdAt');
+                const request = index.openCursor(null, 'prev'); // 'prev' = newest first
+                const documents = [];
+                request.onsuccess = (event) => {
+                    const cursor = event.target.result;
+                    if (cursor) {
+                        documents.push(cursor.value);
+                        cursor.continue();
+                    } else {
+                        resolve(documents);
+                    }
+                };
+                request.onerror = (event) => reject(event.target.error);
+                tx.oncomplete = () => db.close();
+            });
+        },
+
+        // Delete one document
+        async delete(id) {
+            const db = await this.open();
+            return new Promise((resolve, reject) => {
+                const tx = db.transaction(this.storeName, 'readwrite');
+                const store = tx.objectStore(this.storeName);
+                const request = store.delete(id);
+                request.onsuccess = () => resolve();
+                request.onerror = (event) => reject(event.target.error);
+                tx.oncomplete = () => db.close();
+            });
+        },
+
+        // Delete all documents
+        async clear() {
+            const db = await this.open();
+            return new Promise((resolve, reject) => {
+                const tx = db.transaction(this.storeName, 'readwrite');
+                const store = tx.objectStore(this.storeName);
+                const request = store.clear();
+                request.onsuccess = () => resolve();
+                request.onerror = (event) => reject(event.target.error);
+                tx.oncomplete = () => db.close();
+            });
+        },
+
+        // Count total documents
+        async count() {
+            const db = await this.open();
+            return new Promise((resolve, reject) => {
+                const tx = db.transaction(this.storeName, 'readonly');
+                const store = tx.objectStore(this.storeName);
+                const request = store.count();
+                request.onsuccess = () => resolve(request.result);
+                request.onerror = (event) => reject(event.target.error);
+                tx.oncomplete = () => db.close();
+            });
+        }
+    };
+
+
+    // ================================================================
+    // SECTION 4: OPENROUTER API CLIENT
+    // ================================================================
+    // Communicates with OpenRouter's OpenAI-compatible API.
+    // Endpoints:
+    //   POST /api/v1/chat/completions  — text generation (streaming or not)
+    //   POST /api/v1/embeddings         — vector embeddings
+    //
+    // Auth: Bearer token in Authorization header.
+    // Also sends HTTP-Referer and X-Title as recommended by OpenRouter.
+    //
+    // Streaming uses Server-Sent Events (SSE) format:
+    //   Each line: "data: {json}\n"
+    //   Final line: "data: [DONE]\n"
+    //   Tokens arrive in choices[0].delta.content (not message.content)
+    // ================================================================
+
+    const OpenRouter = {
+        baseUrl: 'https://openrouter.ai/api/v1',
+
+        // Non-streaming chat — used for document structuring
+        async chat(messages, options = {}) {
+            if (!AppState.apiKey) throw new Error('API key not configured.');
+            const body = {
+                model: AppState.chatModel,
+                messages: messages,
+                temperature: options.temperature ?? 0.3,
+                max_tokens: options.maxTokens ?? 2000,
+            };
+            const response = await fetch(`${this.baseUrl}/chat/completions`, {
+                method: 'POST',
+                headers: {
+                    'Authorization': `Bearer ${AppState.apiKey}`,
+                    'Content-Type': 'application/json',
+                    'HTTP-Referer': 'https://wisdom.wisdomignited.com',
+                    'X-Title': 'Wisdom Ignited RAG'
+                },
+                body: JSON.stringify(body)
+            });
+            if (!response.ok) {
+                const errorData = await response.json().catch(() => ({}));
+                throw new Error(errorData.error?.message || `API error: ${response.status}`);
+            }
+            const data = await response.json();
+            return data.choices[0]?.message?.content || '';
+        },
+
+        // Streaming chat — used for the chat UI so the user sees tokens arrive live
+        async chatStream(messages, onChunk, options = {}) {
+            if (!AppState.apiKey) throw new Error('API key not configured.');
+            const body = {
+                model: AppState.chatModel,
+                messages: messages,
+                temperature: options.temperature ?? 0.3,
+                max_tokens: options.maxTokens ?? 2000,
+                stream: true,
+            };
+            const response = await fetch(`${this.baseUrl}/chat/completions`, {
+                method: 'POST',
+                headers: {
+                    'Authorization': `Bearer ${AppState.apiKey}`,
+                    'Content-Type': 'application/json',
+                    'HTTP-Referer': 'https://wisdom.wisdomignited.com',
+                    'X-Title': 'Wisdom Ignited RAG'
+                },
+                body: JSON.stringify(body)
+            });
+            if (!response.ok) {
+                const errorData = await response.json().catch(() => ({}));
+                throw new Error(errorData.error?.message || `API error: ${response.status}`);
+            }
+            const reader = response.body.getReader();
+            const decoder = new TextDecoder();
+            let fullText = '';
+            while (true) {
+                const { done, value } = await reader.read();
+                if (done) break;
+                const chunk = decoder.decode(value, { stream: true });
+                const lines = chunk.split('\n');
+                for (const line of lines) {
+                    if (line.startsWith('data: ')) {
+                        const data = line.slice(6).trim();
+                        if (data === '[DONE]') continue;
+                        try {
+                            const parsed = JSON.parse(data);
+                            const token = parsed.choices?.[0]?.delta?.content || '';
+                            if (token) {
+                                fullText += token;
+                                onChunk(token, fullText);
+                            }
+                        } catch (e) { /* incomplete JSON from chunk boundary — skip */ }
+                    }
+                }
+            }
+            return fullText;
+        },
+
+        // Embedding generation — converts text to vector numbers for semantic search
+        async embed(input) {
+            if (!AppState.apiKey) throw new Error('API key not configured.');
+            if (AppState.embeddingModel === 'none') return null;
+            const texts = Array.isArray(input) ? input : [input];
+            const response = await fetch(`${this.baseUrl}/embeddings`, {
+                method: 'POST',
+                headers: {
+                    'Authorization': `Bearer ${AppState.apiKey}`,
+                    'Content-Type': 'application/json',
+                    'HTTP-Referer': 'https://wisdom.wisdomignited.com',
+                    'X-Title': 'Wisdom Ignited RAG'
+                },
+                body: JSON.stringify({ model: AppState.embeddingModel, input: texts })
+            });
+            if (!response.ok) {
+                const errorData = await response.json().catch(() => ({}));
+                throw new Error(errorData.error?.message || `Embedding error: ${response.status}`);
+            }
+            const data = await response.json();
+            return data.data.map(item => item.embedding);
+        }
+    };
+
+
+    // ================================================================
+    // SECTION 5: OCR ENGINE (Tesseract.js)
+    // ================================================================
+    // Converts images of text into editable/searchable text.
+    // First run downloads ~4MB English model (cached in browser after).
+    // Uses a Web Worker so the UI never freezes during processing.
+    // Reports progress percentage during the "recognizing text" phase.
+    // ================================================================
+
+    const OCR = {
+        async extractText(imageFile, onProgress) {
+            // 'eng' = English, 1 = LSTM OCR engine (best modern accuracy)
+            const worker = await Tesseract.createWorker('eng', 1, {
+                logger: (info) => {
+                    if (info.status === 'recognizing text' && onProgress) {
+                        onProgress(Math.round(info.progress * 100));
+                    }
+                }
+            });
+            try {
+                const result = await worker.recognize(imageFile);
+                const text = result.data.text.trim();
+                const confidence = result.data.confidence;
+                if (!text) throw new Error('No text could be extracted from this image. Try a clearer image with visible text.');
+                if (confidence < 30) {
+                    createToast(`Low OCR confidence (${confidence.toFixed(0)}%). The extracted text may be inaccurate.`, 'warning', 6000);
+                }
+                return text;
+            } finally {
+                await worker.terminate(); // Always free the worker thread
+            }
+        }
+    };
+
+
+    // ================================================================
+    // SECTION 6: TEXT CHUNKING
+    // ================================================================
+    // Splits long documents into overlapping segments for retrieval.
+    // Overlap (default 15% of chunk size) prevents sentences from
+    // being split at chunk boundaries — every sentence appears fully
+    // in at least one chunk.
+    //
+    // Example: chunkSize=300, overlap=45
+    //   Chunk 1: words 1–300
+    //   Chunk 2: words 256–555  (45-word overlap with chunk 1)
+    //   Chunk 3: words 511–810  (45-word overlap with chunk 2)
+    // ================================================================
+
+    function chunkText(text, chunkSize, overlap) {
+        chunkSize = chunkSize || AppState.chunkSize;
+        overlap = overlap || Math.floor(chunkSize * 0.15);
+        const words = text.split(/\s+/).filter(w => w.length > 0);
+        if (words.length === 0) return [];
+        if (words.length <= chunkSize) return [{ text: text, startIndex: 0 }];
+        const chunks = [];
+        const step = chunkSize - overlap;
+        for (let i = 0; i < words.length; i += step) {
+            chunks.push({ text: words.slice(i, i + chunkSize).join(' '), startIndex: i });
+            if (i + chunkSize >= words.length) break;
+        }
+        return chunks;
+    }
+
+
+    // ================================================================
+    // SECTION 7: DOCUMENT PROCESSOR
+    // ================================================================
+    // Sends raw text to the LLM with a strict JSON system prompt.
+    // The LLM cleans OCR errors, creates title/summary/keywords/
+    // category, and structures content with markdown headings.
+    // After parsing, chunks the content and optionally generates
+    // embeddings for each chunk.
+    // ================================================================
+
+    const DocumentProcessor = {
+        async process(rawText, source, sourceName, thumbnail) {
+            const systemPrompt = `You are a knowledge document structurer. Take raw text (which may contain OCR errors) and transform it into a clean, well-structured knowledge document.
+
+You MUST respond with ONLY a valid JSON object. No markdown fences, no code blocks, no extra text. Just raw JSON:
+
+{
+  "title": "A clear, descriptive title",
+  "summary": "A concise 2-3 sentence summary",
+  "keywords": ["keyword1", "keyword2", "keyword3", "keyword4", "keyword5"],
+  "category": "One of: Technology, Science, History, Business, Health, Law, Education, Arts, General",
+  "content": "Full cleaned and structured content. Fix OCR errors, organize with ## markdown headings, ensure logical flow."
+}
+
+Rules:
+- Fix obvious OCR errors (e.g., "rn" to "m" where contextually appropriate)
+- Preserve ALL factual information
+- Do NOT add information not in the original
+- Keep content close to original while improving readability
+- Keywords should be the most important topics/terms`;
+
+            const userMessage = `Structure this ${source === 'image' ? 'OCR-extracted' : 'raw'} text into a knowledge document:\n\n${rawText}`;
+
+            const response = await OpenRouter.chat([
+                { role: 'system', content: systemPrompt },
+                { role: 'user', content: userMessage }
+            ], { temperature: 0.1 });
+
+            // Parse JSON with fallback strategies for LLM quirks
+            let parsed;
+            try {
+                parsed = JSON.parse(response);
+            } catch (e) {
+                const jsonMatch = response.match(/```(?:json)?\s*([\s\S]*?)```/);
+                if (jsonMatch) { parsed = JSON.parse(jsonMatch[1].trim()); }
+                else {
+                    const braceMatch = response.match(/\{[\s\S]*\}/);
+                    if (braceMatch) { parsed = JSON.parse(braceMatch[0]); }
+                    else { throw new Error('Failed to parse LLM response as JSON.'); }
+                }
+            }
+
+            // Validate required fields
+            for (const field of ['title', 'summary', 'keywords', 'category', 'content']) {
+                if (!parsed[field]) throw new Error(`Missing field in LLM response: "${field}"`);
+            }
+
+            const chunks = chunkText(parsed.content);
+
+            // Generate embeddings if a model is configured
+            if (AppState.embeddingModel !== 'none') {
+                try {
+                    const embeddings = await OpenRouter.embed(chunks.map(c => c.text));
+                    if (embeddings) chunks.forEach((chunk, i) => { chunk.embedding = embeddings[i] || null; });
+                } catch (err) {
+                    console.warn('Embedding failed, using keyword search:', err.message);
+                    createToast('Embedding generation failed. Document saved with keyword search.', 'warning', 5000);
+                    chunks.forEach(chunk => { chunk.embedding = null; });
+                }
+            } else {
+                chunks.forEach(chunk => { chunk.embedding = null; });
+            }
+
+            return {
+                id: generateId(),
+                title: parsed.title,
+                source, sourceName, rawText,
+                content: parsed.content,
+                summary: parsed.summary,
+                keywords: parsed.keywords.slice(0, 10),
+                category: parsed.category,
+                createdAt: new Date().toISOString(),
+                thumbnail: thumbnail || null,
+                chunks
+            };
+        }
+    };
+
+
+    // ================================================================
+    // SECTION 8: SEARCH ENGINE
+    // ================================================================
+    // Two retrieval methods, selected automatically:
+    //
+    // VECTOR SEARCH (semantic):
+    //   Embed query → cosine similarity with all chunk embeddings → top-K
+    //   Understands meaning, handles synonyms, but requires embedding API
+    //
+    // KEYWORD SEARCH (lexical):
+    //   Tokenize query → score chunks by word overlap → top-K
+    //   Boosts matches in titles (x3) and keywords (x2)
+    //   Normalizes by sqrt(chunk length) to avoid long-chunk bias
+    //   Fast, free, works offline
+    // ================================================================
+
+    const SearchEngine = {
+        async search(query, documents) {
+            if (!documents || documents.length === 0) return [];
+            const hasEmbeddings = documents.some(doc => doc.chunks && doc.chunks.some(c => c.embedding));
+            if (hasEmbeddings && AppState.embeddingModel !== 'none') return this.vectorSearch(query, documents);
+            return this.keywordSearch(query, documents);
+        },
+
+        async vectorSearch(query, documents) {
+            try {
+                const queryEmbeddings = await OpenRouter.embed(query);
+                if (!queryEmbeddings || !queryEmbeddings[0]) return this.keywordSearch(query, documents);
+                const queryVector = queryEmbeddings[0];
+                const results = [];
+                for (const doc of documents) {
+                    if (!doc.chunks) continue;
+                    for (const chunk of doc.chunks) {
+                        if (!chunk.embedding) continue;
+                        results.push({ chunk, document: doc, score: cosineSimilarity(queryVector, chunk.embedding) });
+                    }
+                }
+                results.sort((a, b) => b.score - a.score);
+                return results.slice(0, AppState.topK);
+            } catch (err) {
+                console.warn('Vector search failed:', err);
+                return this.keywordSearch(query, documents);
+            }
+        },
+
+        keywordSearch(query, documents) {
+            const queryWords = query.toLowerCase().split(/[^a-z0-9]+/).filter(w => w.length > 1);
+            if (queryWords.length === 0) return [];
+            const results = [];
+            for (const doc of documents) {
+                if (!doc.chunks) continue;
+                const titleLower = (doc.title || '').toLowerCase();
+                const keywordsLower = (doc.keywords || []).map(k => k.toLowerCase());
+                for (const chunk of doc.chunks) {
+                    const chunkWords = chunk.text.toLowerCase().split(/[^a-z0-9]+/).filter(w => w.length > 1);
+                    let score = 0;
+                    for (const qw of queryWords) { if (chunkWords.includes(qw)) score += 1; }
+                    for (const qw of queryWords) { if (titleLower.includes(qw)) score += 3; }
+                    for (const qw of queryWords) { for (const kw of keywordsLower) { if (kw.includes(qw) || qw.includes(kw)) score += 2; } }
+                    const normalized = chunkWords.length > 0 ? score / Math.sqrt(chunkWords.length) : 0;
+                    if (score > 0) results.push({ chunk, document: doc, score: normalized });
+                }
+            }
+            results.sort((a, b) => b.score - a.score);
+            return results.slice(0, AppState.topK);
+        }
+    };
+
+
+    // ================================================================
+    // COSINE SIMILARITY
+    // ================================================================
+    // Measures how aligned two vectors are (0 = unrelated, 1 = identical meaning).
+    // Formula: dot(A,B) / (|A| * |B|)
+    // Single-pass: computes dot product and both magnitudes in one loop.
+    // ================================================================
+
+    function cosineSimilarity(vecA, vecB) {
+        if (vecA.length !== vecB.length) return 0;
+        let dot = 0, normA = 0, normB = 0;
+        for (let i = 0; i < vecA.length; i++) {
+            dot += vecA[i] * vecB[i];
+            normA += vecA[i] * vecA[i];
+            normB += vecB[i] * vecB[i];
+        }
+        const mag = Math.sqrt(normA) * Math.sqrt(normB);
+        return mag === 0 ? 0 : dot / mag;
+    }
+
+
+    // ================================================================
+    // SECTION 9: RAG PIPELINE
+    // ================================================================
+    // Retrieval-Augmented Generation — the complete Q&A flow:
+    //   1. RETRIEVE: Search knowledge base for relevant chunks
+    //   2. AUGMENT: Build prompt with context + strict grounding instructions
+    //   3. GENERATE: Stream answer from LLM using only provided context
+    //   4. Return answer + source document citations
+    // ================================================================
+
+    const RAG = {
+        async query(question, onToken) {
+            const allDocs = await DB.getAll();
+            const searchResults = await SearchEngine.search(question, allDocs);
+
+            // Deduplicate sources
+            const sourceDocs = [];
+            const seenIds = new Set();
+            for (const r of searchResults) {
+                if (!seenIds.has(r.document.id)) {
+                    seenIds.add(r.document.id);
+                    sourceDocs.push({ doc: r.document, score: r.score });
+                }
+            }
+
+            // Build context string from retrieved chunks
+            let contextString = '';
+            if (searchResults.length > 0) {
+                contextString = searchResults.map(r =>
+                    `[Source: ${r.document.title}]\n${r.chunk.text}`
+                ).join('\n\n---\n\n');
+            }
+
+            // System prompt enforces grounding: answer ONLY from context
+            const systemPrompt = `You are Wisdom, a knowledgeable assistant powered by RAG (Retrieval-Augmented Generation). You answer questions based ONLY on the knowledge documents provided in your context.
+
+Rules:
+- Answer using ONLY the information provided in the context below
+- If the context doesn't contain enough information, say "I don't have enough information in my knowledge base to answer that question accurately."
+- Do NOT make up, guess, or hallucinate information
+- Cite the source document title when possible
+- Be concise but thorough
+- If the question is a greeting or general chat, respond naturally but briefly${contextString ? `\n\n---\nKNOWLEDGE CONTEXT:\n${contextString}` : '\n\nNo knowledge context is currently available.'}`;
+
+            const messages = [{ role: 'system', content: systemPrompt }];
+            // Include recent chat history for multi-turn context
+            for (const msg of AppState.chatHistory.slice(-10)) {
+                messages.push({ role: msg.role, content: msg.content });
+            }
+            messages.push({ role: 'user', content: question });
+
+            const answer = await OpenRouter.chatStream(messages, onToken, { temperature: 0.3 });
+            return { answer, sources: sourceDocs };
+        }
+    };
+
+
+    // ================================================================
+    // SECTION 10: UTILITIES
+    // ================================================================
+
+    function generateId() {
+        return Date.now().toString(36) + Math.random().toString(36).substring(2, 11);
+    }
+
+    // Creates a small JPEG thumbnail to avoid storing full images in IndexedDB
+    function createThumbnail(file, maxWidth = 300, maxHeight = 200) {
+        return new Promise((resolve, reject) => {
+            const img = new Image();
+            const url = URL.createObjectURL(file);
+            img.onload = () => {
+                let w = img.naturalWidth, h = img.naturalHeight;
+                const ratio = Math.min(maxWidth / w, maxHeight / h);
+                if (ratio < 1) { w = Math.round(w * ratio); h = Math.round(h * ratio); }
+                const canvas = document.createElement('canvas');
+                canvas.width = w; canvas.height = h;
+                canvas.getContext('2d').drawImage(img, 0, 0, w, h);
+                const thumb = canvas.toDataURL('image/jpeg', 0.7);
+                URL.revokeObjectURL(url);
+                resolve(thumb);
+            };
+            img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('Failed to load image')); };
+            img.src = url;
+        });
+    }
+
+    function formatFileSize(bytes) {
+        if (bytes < 1024) return bytes + ' B';
+        if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+        return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+    }
+
+    function formatDate(iso) {
+        return new Date(iso).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+    }
+
+    // Prevents XSS when inserting user/LLM content into the DOM
+    function escapeHtml(str) {
+        const d = document.createElement('div');
+        d.textContent = str;
+        return d.innerHTML;
+    }
+
+    // Minimal markdown renderer for AI responses
+    function simpleMarkdown(text) {
+        return text
+            .replace(/^## (.+)$/gm, '<strong style="display:block;font-size:1.1em;margin:12px 0 6px;color:var(--accent);">$1</strong>')
+            .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+            .replace(/^- (.+)$/gm, '<span style="display:block;padding-left:16px;position:relative;margin:2px 0;"><span style="position:absolute;left:0;">\u2022</span>$1</span>')
+            .replace(/\n\n/g, '<br><br>')
+            .replace(/\n/g, '<br>');
+    }
+
+
+    // ================================================================
+    // SECTION 11: UI CONTROLLERS
+    // ================================================================
+
+    function switchView(viewName) {
+        document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
+        const target = document.getElementById(`view-${viewName}`);
+        if (target) target.classList.add('active');
+        document.querySelectorAll('.nav-item').forEach(item => {
+            item.classList.toggle('active', item.dataset.view === viewName);
+        });
+        if (viewName === 'dashboard') refreshDashboard();
+        if (viewName === 'library') refreshLibrary();
+    }
+
+    async function refreshDashboard() {
+        try {
+            const docs = await DB.getAll();
+            let totalChunks = 0, imageCount = 0;
+            for (const doc of docs) {
+                totalChunks += (doc.chunks || []).length;
+                if (doc.source === 'image') imageCount++;
+            }
+            animateNumber('statDocs', docs.length);
+            animateNumber('statChunks', totalChunks);
+            animateNumber('statImages', imageCount);
+
+            const container = document.getElementById('recentDocs');
+            const recent = docs.slice(0, 5);
+            if (recent.length === 0) {
+                container.innerHTML = `<div class="wisdom-card text-center" style="color:var(--text-muted);"><i class="fas fa-inbox mb-2 text-2xl" style="opacity:0.3;"></i><p>No documents yet. Start by adding knowledge.</p></div>`;
+                return;
+            }
+            container.innerHTML = recent.map(doc => `
+                <div class="wisdom-card flex items-center gap-4 cursor-pointer" onclick="showDocumentModal('${doc.id}')">
+                    ${doc.thumbnail
+                        ? `<img src="${doc.thumbnail}" class="w-12 h-12 rounded-lg object-cover flex-shrink-0" alt="">`
+                        : `<div class="w-12 h-12 rounded-lg flex items-center justify-center flex-shrink-0" style="background:var(--accent-glow);"><i class="fas fa-file-lines" style="color:var(--accent);"></i></div>`}
+                    <div class="flex-1 min-w-0">
+                        <div class="font-semibold truncate" style="color:var(--text-primary);">${escapeHtml(doc.title)}</div>
+                        <div class="text-sm truncate" style="color:var(--text-muted);">${escapeHtml(doc.summary)}</div>
+                    </div>
+                    <div class="text-xs flex-shrink-0" style="color:var(--text-muted);">${formatDate(doc.createdAt)}</div>
+                </div>`).join('');
+        } catch (err) { console.error('Dashboard error:', err); }
+    }
+
+    function animateNumber(id, target) {
+        const el = document.getElementById(id);
+        if (!el) return;
+        const start = performance.now(), from = parseInt(el.textContent) || 0;
+        (function update(now) {
+            const p = Math.min((now - start) / 600, 1);
+            el.textContent = Math.round(from + (target - from) * (1 - Math.pow(1 - p, 3)));
+            if (p < 1) requestAnimationFrame(update);
+        })(start);
+    }
+
+    async function refreshLibrary(filter = '') {
+        try {
+            const docs = await DB.getAll();
+            const grid = document.getElementById('libraryGrid');
+            const empty = document.getElementById('libraryEmpty');
+            const filtered = filter
+                ? docs.filter(d => { const q = filter.toLowerCase(); return d.title.toLowerCase().includes(q) || d.summary.toLowerCase().includes(q) || (d.keywords||[]).some(k=>k.toLowerCase().includes(q)) || d.category.toLowerCase().includes(q); })
+                : docs;
+            if (filtered.length === 0) {
+                grid.innerHTML = '';
+                empty.style.display = 'block';
+                empty.querySelector('p').textContent = filter && docs.length > 0 ? `No documents match "${filter}"` : 'Your library is empty';
+                return;
+            }
+            empty.style.display = 'none';
+            grid.innerHTML = filtered.map(doc => `
+                <div class="doc-card" onclick="showDocumentModal('${doc.id}')">
+                    ${doc.thumbnail
+                        ? `<img src="${doc.thumbnail}" class="doc-card-thumb" alt="${escapeHtml(doc.title)}">`
+                        : `<div class="doc-card-thumb flex items-center justify-center"><i class="fas fa-file-lines text-3xl" style="color:var(--text-muted);opacity:0.3;"></i></div>`}
+                    <div class="doc-card-body">
+                        <div class="flex items-start justify-between gap-2 mb-2">
+                            <h4 class="font-semibold text-sm leading-tight" style="color:var(--text-primary);">${escapeHtml(doc.title)}</h4>
+                            <button class="flex-shrink-0 w-7 h-7 rounded flex items-center justify-center" style="color:var(--text-muted);background:none;border:none;cursor:pointer;" onclick="event.stopPropagation();deleteDocument('${doc.id}')" title="Delete" aria-label="Delete"><i class="fas fa-trash-can text-xs"></i></button>
+                        </div>
+                        <p class="text-xs mb-3 leading-relaxed" style="color:var(--text-secondary);display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;">${escapeHtml(doc.summary)}</p>
+                        <div class="flex items-center gap-2 flex-wrap">
+                            <span class="keyword-tag">${escapeHtml(doc.category)}</span>
+                            <span class="text-xs" style="color:var(--text-muted);">${(doc.chunks||[]).length} chunks</span>
+                        </div>
+                    </div>
+                </div>`).join('');
+        } catch (err) { console.error('Library error:', err); }
+    }
+
+    async function showDocumentModal(docId) {
+        const doc = await DB.get(docId);
+        if (!doc) return;
+        document.getElementById('modalContent').innerHTML = `
+            <div class="flex items-start justify-between mb-6">
+                <div>
+                    <h3 class="font-display text-2xl font-bold mb-1" style="color:var(--text-primary);">${escapeHtml(doc.title)}</h3>
+                    <div class="flex items-center gap-3 text-sm" style="color:var(--text-muted);">
+                        <span><i class="fas fa-${doc.source==='image'?'image':'keyboard'} mr-1"></i>${escapeHtml(doc.sourceName)}</span>
+                        <span><i class="fas fa-clock mr-1"></i>${formatDate(doc.createdAt)}</span>
+                        <span class="keyword-tag">${escapeHtml(doc.category)}</span>
+                    </div>
+                </div>
+                <button class="btn-ghost" onclick="closeModal()" style="padding:8px 12px;"><i class="fas fa-xmark"></i></button>
+            </div>
+            ${doc.thumbnail ? `<img src="${doc.thumbnail}" class="w-full rounded-lg mb-4" style="max-height:200px;object-fit:cover;" alt="">` : ''}
+            <div class="mb-4">
+                <div class="text-xs font-semibold uppercase tracking-wider mb-1" style="color:var(--text-muted);">Summary</div>
+                <p class="text-sm leading-relaxed" style="color:var(--text-secondary);">${escapeHtml(doc.summary)}</p>
+            </div>
+            <div class="mb-4">
+                <div class="text-xs font-semibold uppercase tracking-wider mb-2" style="color:var(--text-muted);">Keywords</div>
+                <div class="flex flex-wrap gap-2">${(doc.keywords||[]).map(k=>`<span class="keyword-tag">${escapeHtml(k)}</span>`).join('')}</div>
+            </div>
+            <div class="mb-4">
+                <div class="text-xs font-semibold uppercase tracking-wider mb-1" style="color:var(--text-muted);">Structured Content</div>
+                <div class="text-sm leading-relaxed p-4 rounded-lg" style="color:var(--text-secondary);background:var(--bg-input);max-height:300px;overflow-y:auto;">${simpleMarkdown(escapeHtml(doc.content))}</div>
+            </div>
+            <div class="mb-4">
+                <div class="text-xs font-semibold uppercase tracking-wider mb-1" style="color:var(--text-muted);">Raw Text (Original)</div>
+                <details style="cursor:pointer;"><summary class="text-sm mb-2" style="color:var(--text-muted);">Click to expand</summary>
+                <div class="text-xs p-3 rounded-lg" style="color:var(--text-muted);background:var(--bg-input);white-space:pre-wrap;max-height:200px;overflow-y:auto;">${escapeHtml(doc.rawText)}</div></details>
+            </div>
+            <div class="mt-6 flex gap-3 items-center">
+                <button class="btn-danger" onclick="deleteDocument('${doc.id}');closeModal();"><i class="fas fa-trash mr-1"></i> Delete</button>
+                <span class="text-xs" style="color:var(--text-muted);">${(doc.chunks||[]).length} chunks stored</span>
+            </div>`;
+        document.getElementById('modalOverlay').classList.add('active');
+    }
+
+    function closeModal() { document.getElementById('modalOverlay').classList.remove('active'); }
+
+    async function deleteDocument(docId) {
+        try {
+            await DB.delete(docId);
+            createToast('Document deleted.', 'success');
+            refreshDashboard();
+            refreshLibrary();
+        } catch (err) { createToast('Failed to delete: ' + err.message, 'error'); }
+    }
+
+
+    // ================================================================
+    // SECTION 12: INGEST PIPELINE CONTROLLER
+    // ================================================================
+    // Orchestrates: Image → OCR → Structure → Chunk → Embed → Store
+    // Or: Text → Structure → Chunk → Embed → Store
+    // Updates the processing pipeline UI at each step.
+    // ================================================================
+
+    async function processInput() {
+        if (AppState.isProcessing) return;
+        const activeTab = document.querySelector('.ingest-tab.active').dataset.tab;
+        let rawText = '', source = activeTab, sourceName = 'Manual Input', thumbnail = null;
+
+        if (activeTab === 'image') {
+            if (!AppState.currentImageFile) { createToast('Please select an image first.', 'warning'); return; }
+            sourceName = AppState.currentImageFile.name;
+        } else {
+            rawText = document.getElementById('textInput').value.trim();
+            if (!rawText) { createToast('Please enter some text first.', 'warning'); return; }
+        }
+
+        AppState.isProcessing = true;
+        const btn = document.getElementById('btnProcess');
+        btn.disabled = true;
+        btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Processing...';
+        document.getElementById('processingArea').style.display = 'block';
+        document.getElementById('resultArea').style.display = 'none';
+
+        ['stepOcr','stepStructure','stepEmbed','stepStore'].forEach(id => {
+            document.getElementById(id).querySelector('.step-icon').className = 'step-icon pending';
+        });
+
+        try {
+            // Step 1: OCR (image only)
+            if (activeTab === 'image') {
+                const step = document.getElementById('stepOcr');
+                step.querySelector('.step-icon').className = 'step-icon active';
+                const bar = document.getElementById('ocrProgress');
+                bar.style.display = 'block';
+                try {
+                    rawText = await OCR.extractText(AppState.currentImageFile, pct => {
+                        bar.querySelector('.progress-fill').style.width = pct + '%';
+                    });
+                    thumbnail = await createThumbnail(AppState.currentImageFile);
+                    step.querySelector('.step-icon').className = 'step-icon done';
+                    step.querySelector('.text-xs').textContent = `Extracted ${rawText.split(/\s+/).length} words`;
+                } catch (err) {
+                    step.querySelector('.step-icon').className = 'step-icon pending';
+                    bar.style.display = 'none';
+                    throw err;
+                }
+            } else {
+                const step = document.getElementById('stepOcr');
+                step.querySelector('.step-icon').className = 'step-icon done';
+                step.querySelector('.text-xs').textContent = 'Skipped (text input)';
+            }
+
+            // Step 2: Structure with LLM
+            const stepS = document.getElementById('stepStructure');
+            stepS.querySelector('.step-icon').className = 'step-icon active';
+            const document = await DocumentProcessor.process(rawText, source, sourceName, thumbnail);
+            stepS.querySelector('.step-icon').className = 'step-icon done';
+            stepS.querySelector('.text-xs').textContent = `Structured as "${document.title}"`;
+
+            // Step 3: Embeddings
+            const stepE = document.getElementById('stepEmbed');
+            if (AppState.embeddingModel !== 'none') {
+                stepE.querySelector('.step-icon').className = 'step-icon active';
+                stepE.querySelector('.step-icon').className = 'step-icon done';
+                stepE.querySelector('.text-xs').textContent = `Generated ${document.chunks.length} embedding vectors`;
+            } else {
+                stepE.querySelector('.step-icon').className = 'step-icon done';
+                stepE.querySelector('.text-xs').textContent = 'Skipped (keyword search mode)';
+            }
+
+            // Step 4: Store
+            const stepD = document.getElementById('stepStore');
+            stepD.querySelector('.step-icon').className = 'step-icon active';
+            await DB.put(document);
+            stepD.querySelector('.step-icon').className = 'step-icon done';
+            stepD.querySelector('.text-xs').textContent = `Stored with ${document.chunks.length} chunks`;
+
+            // Show result
+            document.getElementById('resultArea').style.display = 'block';
+            document.getElementById('resultTitle').textContent = document.title;
+            document.getElementById('resultSummary').textContent = document.summary;
+            document.getElementById('resultKeywords').innerHTML = document.keywords.map(k => `<span class="keyword-tag">${escapeHtml(k)}</span>`).join('');
+            document.getElementById('resultContent').textContent = document.content;
+            createToast(`"${document.title}" added to knowledge base!`, 'success');
+            clearImageSelection();
+            document.getElementById('textInput').value = '';
+        } catch (err) {
+            console.error('Processing error:', err);
+            createToast(err.message, 'error', 6000);
+        } finally {
+            AppState.isProcessing = false;
+            btn.disabled = true;
+            btn.innerHTML = '<i class="fas fa-bolt"></i> Process and Store Knowledge';
+        }
+    }
+
+
+    // ================================================================
+    // SECTION 13: CHAT CONTROLLER
+    // ================================================================
+
+    let isChatBusy = false;
+
+    async function sendChatMessage() {
+        if (isChatBusy) return;
+        const input = document.getElementById('chatInput');
+        const question = input.value.trim();
+        if (!question) return;
+
+        isChatBusy = true;
+        input.value = '';
+        input.style.height = '44px';
+        const container = document.getElementById('chatMessages');
+
+        // User bubble
+        const userBubble = document.createElement('div');
+        userBubble.className = 'chat-bubble user';
+        userBubble.textContent = question;
+        container.appendChild(userBubble);
+
+        // Assistant bubble (starts with typing indicator)
+        const assistantBubble = document.createElement('div');
+        assistantBubble.className = 'chat-bubble assistant';
+        assistantBubble.innerHTML = '<div class="typing-indicator"><span></span><span></span><span></span></div>';
+        container.appendChild(assistantBubble);
+        container.scrollTop = container.scrollHeight;
+
+        try {
+            const result = await RAG.query(question, (token, fullText) => {
+                assistantBubble.innerHTML = `<p>${simpleMarkdown(escapeHtml(fullText))}</p>`;
+                container.scrollTop = container.scrollHeight;
+            });
+
+            // Add source citations after streaming completes
+            if (result.sources && result.sources.length > 0) {
+                assistantBubble.innerHTML += `<div class="context-badge"><i class="fas fa-book-open"></i> Sources: ${result.sources.map(s => `<span>${escapeHtml(s.doc.title)}</span>`).join('')}</div>`;
+            }
+
+            AppState.chatHistory.push({ role: 'user', content: question });
+            AppState.chatHistory.push({ role: 'assistant', content: result.answer });
+        } catch (err) {
+            console.error('Chat error:', err);
+            assistantBubble.innerHTML = `<p style="color:var(--error);">Error: ${escapeHtml(err.message)}</p>`;
+        } finally {
+            isChatBusy = false;
+            container.scrollTop = container.scrollHeight;
+        }
+    }
+
+
+    // ================================================================
+    // SECTION 14: SETTINGS & PERSISTENCE
+    // ================================================================
+
+    function loadSettings() {
+        const saved = localStorage.getItem('wisdom_ignited_settings');
+        if (saved) {
+            try {
+                const p = JSON.parse(saved);
+                // Always keep the hardcoded API key — it's the primary one
+                AppState.chatModel = p.chatModel || 'openai/gpt-oss-120b:free';
+                AppState.embeddingModel = p.embeddingModel || 'none';
+                AppState.chunkSize = p.chunkSize || 300;
+                AppState.topK = p.topK || 5;
+            } catch (e) {}
+        }
+    }
+
+    function saveSettings() {
+        localStorage.setItem('wisdom_ignited_settings', JSON.stringify({
+            chatModel: AppState.chatModel,
+            embeddingModel: AppState.embeddingModel,
+            chunkSize: AppState.chunkSize,
+            topK: AppState.topK,
+        }));
+    }
+
+    function populateSettingsForm() {
+        document.getElementById('settingsApiKey').value = AppState.apiKey;
+        document.getElementById('settingsModel').value = AppState.chatModel;
+        document.getElementById('settingsEmbedding').value = AppState.embeddingModel;
+        document.getElementById('settingsChunkSize').value = AppState.chunkSize;
+        document.getElementById('settingsTopK').value = AppState.topK;
+    }
+
+    function readSettingsForm() {
+        // Allow changing the API key from settings, but keep hardcoded as default
+        const newKey = document.getElementById('settingsApiKey').value.trim();
+        if (newKey) AppState.apiKey = newKey;
+        AppState.chatModel = document.getElementById('settingsModel').value;
+        AppState.embeddingModel = document.getElementById('settingsEmbedding').value;
+        AppState.chunkSize = parseInt(document.getElementById('settingsChunkSize').value) || 300;
+        AppState.topK = parseInt(document.getElementById('settingsTopK').value) || 5;
+    }
+
+
+    // ================================================================
+    // SECTION 15: IMAGE UPLOAD HELPERS
+    // ================================================================
+
+    function handleImageSelect(file) {
+        if (!file || !file.type.startsWith('image/')) { createToast('Please select a valid image file.', 'warning'); return; }
+        if (file.size > 20 * 1024 * 1024) { createToast('Image must be under 20MB.', 'warning'); return; }
+        AppState.currentImageFile = file;
+        document.getElementById('previewImg').src = URL.createObjectURL(file);
+        document.getElementById('previewName').textContent = file.name;
+        document.getElementById('previewSize').textContent = formatFileSize(file.size);
+        document.getElementById('imagePreview').style.display = 'block';
+        updateProcessButton();
+    }
+
+    function clearImageSelection() {
+        AppState.currentImageFile = null;
+        document.getElementById('imagePreview').style.display = 'none';
+        document.getElementById('previewImg').src = '';
+        document.getElementById('fileInput').value = '';
+        updateProcessButton();
+    }
+
+    function updateProcessButton() {
+        const isImage = document.querySelector('.ingest-tab.active').dataset.tab === 'image';
+        const hasInput = isImage ? !!AppState.currentImageFile : document.getElementById('textInput').value.trim().length > 0;
+        document.getElementById('btnProcess').disabled = !hasInput;
+    }
+
+
+    // ================================================================
+    // SECTION 16: EVENT BINDINGS
+    // ================================================================
+
+    document.addEventListener('DOMContentLoaded', () => {
+        loadSettings();
+
+        // API key is pre-configured — skip welcome, go straight to dashboard
+        document.getElementById('sidebar').style.display = 'flex';
+        switchView('dashboard');
+
+        // Sidebar navigation
+        document.querySelectorAll('.nav-item[data-view]').forEach(item => {
+            item.addEventListener('click', () => switchView(item.dataset.view));
+            item.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); switchView(item.dataset.view); } });
+        });
+
+        // Ingest tab switching
+        document.querySelectorAll('.ingest-tab').forEach(tab => {
+            tab.addEventListener('click', () => {
+                document.querySelectorAll('.ingest-tab').forEach(t => t.classList.remove('active'));
+                tab.classList.add('active');
+                const isImage = tab.dataset.tab === 'image';
+                document.getElementById('ingestTabImage').style.display = isImage ? 'block' : 'none';
+                document.getElementById('ingestTabText').style.display = isImage ? 'none' : 'block';
+                updateProcessButton();
+            });
+        });
+
+        // Drag and drop
+        const dropZone = document.getElementById('dropZone');
+        const fileInput = document.getElementById('fileInput');
+        dropZone.addEventListener('click', () => fileInput.click());
+        dropZone.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); fileInput.click(); } });
+        fileInput.addEventListener('change', e => { if (e.target.files[0]) handleImageSelect(e.target.files[0]); });
+        dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('drag-over'); });
+        dropZone.addEventListener('dragleave', () => dropZone.classList.remove('drag-over'));
+        dropZone.addEventListener('drop', e => { e.preventDefault(); dropZone.classList.remove('drag-over'); if (e.dataTransfer.files[0]) handleImageSelect(e.dataTransfer.files[0]); });
+
+        document.getElementById('btnClearImage').addEventListener('click', clearImageSelection);
+        document.getElementById('textInput').addEventListener('input', updateProcessButton);
+        document.getElementById('btnProcess').addEventListener('click', processInput);
+
+        // Library search
+        document.getElementById('librarySearch').addEventListener('input', e => refreshLibrary(e.target.value.trim()));
+
+        // Chat
+        document.getElementById('btnSendChat').addEventListener('click', sendChatMessage);
+        document.getElementById('chatInput').addEventListener('keydown', e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendChatMessage(); } });
+        document.getElementById('chatInput').addEventListener('input', function() { this.style.height = '44px'; this.style.height = Math.min(this.scrollHeight, 120) + 'px'; });
+
+        document.getElementById('btnClearChat').addEventListener('click', () => {
+            AppState.chatHistory = [];
+            document.getElementById('chatMessages').innerHTML = '<div class="chat-bubble assistant"><p>Conversation cleared. How can I help you?</p></div>';
+            createToast('Chat history cleared.', 'info');
+        });
+
+        // Settings
+        document.getElementById('btnSaveSettings').addEventListener('click', () => {
+            readSettingsForm();
+            saveSettings();
+            // Update status text in sidebar
+            const modelName = AppState.chatModel.split('/').pop().replace(':free', '');
+            document.getElementById('statusText').textContent = `Connected — ${modelName}`;
+            createToast('Settings saved successfully.', 'success');
+        });
+        document.querySelector('[data-view="settings"]').addEventListener('click', populateSettingsForm);
+
+        // Clear database (double-click to confirm)
+        document.getElementById('btnClearDatabase').addEventListener('click', async () => {
+            const btn = document.getElementById('btnClearDatabase');
+            if (btn.dataset.confirming === 'true') {
+                try {
+                    await DB.clear();
+                    AppState.chatHistory = [];
+                    createToast('Knowledge base cleared.', 'success');
+                    refreshDashboard();
+                    refreshLibrary();
+                } catch (err) { createToast('Failed: ' + err.message, 'error'); }
+                btn.dataset.confirming = 'false';
+                btn.innerHTML = '<i class="fas fa-trash mr-2"></i> Clear Entire Knowledge Base';
+            } else {
+                btn.dataset.confirming = 'true';
+                btn.innerHTML = '<i class="fas fa-triangle-exclamation mr-2"></i> Click again to confirm deletion';
+                setTimeout(() => { btn.dataset.confirming = 'false'; btn.innerHTML = '<i class="fas fa-trash mr-2"></i> Clear Entire Knowledge Base'; }, 3000);
+            }
+        });
+
+        // Modal close
+        document.getElementById('modalOverlay').addEventListener('click', e => { if (e.target === e.currentTarget) closeModal(); });
+        document.addEventListener('keydown', e => { if (e.key === 'Escape') closeModal(); });
+    });
+    </script>
+</body>
+</html>
